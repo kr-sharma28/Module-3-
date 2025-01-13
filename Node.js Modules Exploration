@@ -1,0 +1,94 @@
+// Import required modules
+const crypto = require("crypto");
+const fs = require("fs");
+const { createReadStream } = require("fs");
+const os = require("os");
+const { v4: uuidv4 } = require("uuid");
+const { performance } = require("perf_hooks");
+
+// Encrypt a string using the crypto module
+function encryptString() {
+    const algorithm = "aes-256-cbc";
+    const key = crypto.randomBytes(32);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv(algorithm, key, iv);
+
+    const input = "Hello, Good Morning";
+    let encrypted = cipher.update(input, "utf8", "hex");
+    encrypted += cipher.final("hex");
+
+    console.log("Encrypted String:", encrypted);
+    console.log("Key (Base64):", key.toString("base64"));
+    console.log("IV (Base64):", iv.toString("base64"));
+}
+
+// Generate a random string using UUID
+function generateUUID() {
+    const id = uuidv4();
+    console.log("Generated UUID:", id);
+}
+
+// Compare reading large files using stream and fs.readFileSync
+function compareFileRead(filePath) {
+    // Measure fs.readFileSync
+    const startSync = performance.now();
+    const data = fs.readFileSync(filePath, "utf8");
+    const endSync = performance.now();
+    console.log(`fs.readFileSync - Time Taken: ${(endSync - startSync).toFixed(2)}ms`);
+
+    // Measure Stream
+    const startStream = performance.now();
+    const readStream = createReadStream(filePath, { encoding: "utf8" });
+    let streamData = "";
+
+    readStream.on("data", (chunk) => {
+        streamData += chunk;
+    });
+
+    readStream.on("end", () => {
+        const endStream = performance.now();
+        console.log(`Stream - Time Taken: ${(endStream - startStream).toFixed(2)}ms`);
+    });
+}
+
+// Print system details using the OS module
+function printSystemDetails() {
+    console.log("System Details:");
+    console.log("Platform:", os.platform());
+    console.log("Architecture:", os.arch());
+    console.log("CPU Details:", os.cpus());
+    console.log("Total Memory:", (os.totalmem() / (1024 ** 3)).toFixed(2), "GB");
+    console.log("Free Memory:", (os.freemem() / (1024 ** 3)).toFixed(2), "GB");
+    console.log("Home Directory:", os.homedir());
+    console.log("Uptime:", (os.uptime() / 3600).toFixed(2), "hours");
+}
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+
+if (args.length === 0) {
+    console.log("Please provide a valid argument: encrypt, uuid, compare, system");
+} else {
+    const command = args[0];
+    switch (command) {
+        case "encrypt":
+            encryptString();
+            break;
+        case "uuid":
+            generateUUID();
+            break;
+        case "compare":
+            const filePath = args[1];
+            if (!filePath) {
+                console.log("Please provide the file path as the second argument.");
+            } else {
+                compareFileRead(filePath);
+            }
+            break;
+        case "system":
+            printSystemDetails();
+            break;
+        default:
+            console.log("Invalid command. Use: encrypt, uuid, compare, system");
+    }
+}
