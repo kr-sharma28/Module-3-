@@ -1,0 +1,148 @@
+// Import required modules
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const { Schema } = mongoose;
+
+// Initialize Express app
+const app = express();
+app.use(express.json());
+
+// Connect to MongoDB
+mongoose.connect('mongodb://localhost:27017/todos_app', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+// Define the User Schema
+const userSchema = new Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+});
+
+userSchema.pre('save', async function (next) {
+  if (this.isModified('password')) {
+    this.password = await bcrypt.hash(this.password, 10);
+  }
+  next();
+});
+
+const User = mongoose.model('User', userSchema);
+
+// Define the Todo Schema
+const todoSchema = new Schema({
+  title: { type: String, required: true },
+  description: { type: String },
+  completed: { type: Boolean, default: false },
+  isPublic: { type: Boolean, default: false },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+});
+
+const Todo = mongoose.model('Todo', todoSchema);
+
+// Middleware for authentication
+const authenticate = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: 'Unauthorized' });
+
+  try {
+    const decoded = jwt.verify(token, 'your_jwt_secret');
+    req.user = decoded;
+    next();
+  } catch (error) {
+    res.status(401).json({ message: 'Invalid token' });
+  }
+};
+
+// Registration route
+app.post('/register', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return res.status(400).json({ message: 'User already exists' });
+
+    const user = new User({ email, password });
+    await user.save();
+    res.status(201).json({ message: 'User registered successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error registering user', error: error.message });
+  }
+});
+
+// Login route
+app.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(400).json({ message: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ id: user._id, email: user.email }, 'your_jwt_secret', { expiresIn: '1h' });
+    res.status(200).json({ token });
+  } catch (error) {
+    res.status(500).json({ message: 'Error logging in', error: error.message });
+  }
+});
+
+// Create Todo route
+app.post('/todos', authenticate, async (req, res) => {
+  try {
+    const { title, description, isPublic } = req.body;
+    const todo = new Todo({
+      title,
+      description,
+      isPublic,
+      userId: req.user.id,
+    });
+    await todo.save();
+    res.status(201).json(todo);
+  } catch (error) {
+    res.status(500).json({ message: 'Error creating todo', error: error.message });
+  }
+});
+
+// Read Todos route
+app.get('/todos', authenticate, async (req, res) => {
+  try {
+    const todos = await Todo.find({ $or: [{ userId: req.user.id }, { isPublic: true }] });
+    res.status(200).json(todos);
+  } catch (error) {
+    res.status(500).json({ message: 'Error retrieving todos', error: error.message });
+  }
+});
+
+// Update Todo route
+app.put('/todos/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const todo = await Todo.findOne({ _id: id, userId: req.user.id });
+    if (!todo) return res.status(404).json({ message: 'Todo not found' });
+
+    Object.assign(todo, req.body);
+    await todo.save();
+    res.status(200).json(todo);
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating todo', error: error.message });
+  }
+});
+
+// Delete Todo route
+app.delete('/todos/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const todo = await Todo.findOneAndDelete({ _id: id, userId: req.user.id });
+    if (!todo) return res.status(404).json({ message: 'Todo not found' });
+
+    res.status(200).json({ message: 'Todo deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting todo', error: error.message });
+  }
+});
+
+// Start the server
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
