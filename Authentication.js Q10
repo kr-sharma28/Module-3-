@@ -1,0 +1,107 @@
+// Import required modules
+let express = require('express');
+let mongoose = require('mongoose');
+let bcrypt = require('bcrypt');
+
+// Initialize Express app
+let app = express();
+app.use(express.json());
+
+// Connect to MongoDB
+mongoose.connect('mongodb://localhost:27017/user_management', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+// Define the User Schema
+let userSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  dob: { type: Date },
+  mobileNumber: { type: String },
+});
+
+// Remove the password field when converting the document to JSON
+userSchema.set('toJSON', {
+  transform: (doc, ret) => {
+    delete ret.password;
+    return ret;
+  },
+});
+
+let User = mongoose.model('User', userSchema);
+
+// Registration route
+app.post('/register', async (req, res) => {
+  try {
+    let { email, password, dob, mobileNumber } = req.body;
+
+    // Check if user already exists
+    let existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+
+    // Hash the password
+    let hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    let newUser = new User({ email, password: hashedPassword, dob, mobileNumber });
+    await newUser.save();
+
+    res.status(201).json({ message: 'User registered successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error registering user', error: error.message });
+  }
+});
+
+// Get user details route
+app.get('/user/:email', async (req, res) => {
+  try {
+    let { email } = req.params;
+
+    // Find user by email
+    let user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(500).json({ message: 'Error retrieving user', error: error.message });
+  }
+});
+
+// Password reset route
+app.post('/resetpassword', async (req, res) => {
+  try {
+    let { email, dob, mobileNumber, newPassword } = req.body;
+
+    // Find user by email and either dob or mobileNumber
+    let user = await User.findOne({
+      email,
+      $or: [{ dob }, { mobileNumber }],
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found or verification failed' });
+    }
+
+    // Hash the new password
+    let hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update the password
+    user.password = hashedPassword;
+    await user.save();
+
+    res.status(200).json({ message: 'Password reset successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error resetting password', error: error.message });
+  }
+});
+
+// Start the server
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
