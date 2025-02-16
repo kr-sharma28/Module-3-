@@ -1,0 +1,200 @@
+// Define MongoDB Models
+//Post Model (models/Post.js)
+
+let mongoose = require("mongoose");
+
+let postSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+
+module.exports = mongoose.model("Post", postSchema);
+//Comment Model (models/Comment.js)
+
+let mongoose = require("mongoose");
+
+let commentSchema = new mongoose.Schema({
+  postId: { type: mongoose.Schema.Types.ObjectId, ref: "Post", required: true },
+  text: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+
+module.exports = mongoose.model("Comment", commentSchema);
+// Connect to MongoDB and Redis
+//Redis Connection (config/redisClient.js)
+
+let { createClient } = require("redis");
+require("dotenv").config();
+
+let redisClient = createClient({
+  url: process.env.REDIS_URI, // e.g., redis://localhost:6379
+});
+
+redisClient.on("error", (err) => console.error("Redis Error:", err));
+
+(async () => {
+  await redisClient.connect();
+})();
+
+module.exports = redisClient;
+// Implement API Routes
+//Post Routes (routes/postRoutes.js)
+
+let express = require("express");
+let Post = require("../models/Post");
+let redisClient = require("../config/redisClient");
+
+let router = express.Router();
+
+// Create a new post
+router.post("/posts", async (req, res) => {
+  try {
+    let { title, content } = req.body;
+    let post = await Post.create({ title, content });
+    res.status(201).json(post);
+  } catch (error) {
+    res.status(500).json({ message: "Error creating post", error });
+  }
+});
+
+// Get a post (with Redis caching)
+router.get("/posts/:id", async (req, res) => {
+  try {
+    let postId = req.params.id;
+
+    // Check Redis cache
+    let cachedPost = await redisClient.get(`post:${postId}`);
+    if (cachedPost) {
+      console.log("Cache Hit");
+      return res.json(JSON.parse(cachedPost));
+    }
+
+    // Fetch from MongoDB
+    let post = await Post.findById(postId);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+
+    // Store in Redis with a 5-minute expiry
+    await redisClient.setEx(`post:${postId}`, 300, JSON.stringify(post));
+
+    console.log("Cache Miss - Fetching from DB");
+    res.json(post);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching post", error });
+  }
+});
+
+// Update a post (invalidate cache)
+router.put("/posts/:id", async (req, res) => {
+  try {
+    let { title, content } = req.body;
+    let postId = req.params.id;
+
+    let updatedPost = await Post.findByIdAndUpdate(
+      postId,
+      { title, content },
+      { new: true }
+    );
+
+    if (!updatedPost) return res.status(404).json({ message: "Post not found" });
+
+    // Invalidate cache
+    await redisClient.del(`post:${postId}`);
+
+    res.json(updatedPost);
+  } catch (error) {
+    res.status(500).json({ message: "Error updating post", error });
+  }
+});
+//Comment Routes (routes/commentRoutes.js)
+
+let express = require("express");
+let Comment = require("../models/Comment");
+
+let router = express.Router();
+
+// Add a comment to a post
+router.post("/posts/:id/comments", async (req, res) => {
+  try {
+    let { text } = req.body;
+    let postId = req.params.id;
+
+    let comment = await Comment.create({ postId, text });
+    res.status(201).json(comment);
+  } catch (error) {
+    res.status(500).json({ message: "Error adding comment", error });
+  }
+});
+
+// Fetch all comments for a post
+router.get("/posts/:id/comments", async (req, res) => {
+  try {
+    let postId = req.params.id;
+    let comments = await Comment.find({ postId });
+    res.json(comments);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching comments", error });
+  }
+});
+
+module.exports = router;
+// Schedule a Cron Job to Delete Old Posts
+Create a cron job that runs every night at midnight to delete posts older than 30 days.
+
+Cron Job (cronJobs/deleteOldPosts.js)
+
+let cron = require("node-cron");
+let Post = require("../models/Post");
+let redisClient = require("../config/redisClient");
+
+// Run every day at midnight
+cron.schedule("0 0 * * *", async () => {
+  try {
+    let thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    let oldPosts = await Post.find({ createdAt: { $lt: thirtyDaysAgo } });
+
+    if (oldPosts.length > 0) {
+      console.log(`Warning: ${oldPosts.length} posts will be deleted!`);
+
+      // Delete posts from database
+      await Post.deleteMany({ createdAt: { $lt: thirtyDaysAgo } });
+
+      // Invalidate cache
+      oldPosts.forEach(async (post) => {
+        await redisClient.del(`post:${post._id}`);
+      });
+
+      console.log(`Deleted ${oldPosts.length} old posts.`);
+    } else {
+      console.log("No old posts to delete.");
+    }
+  } catch (error) {
+    console.error("Error during post cleanup:", error);
+  }
+});
+// Set Up Server (server.js)
+//Load Routes and Start Server
+
+require("dotenv").config();
+let express = require("express");
+let mongoose = require("mongoose");
+let postRoutes = require("./routes/postRoutes");
+let commentRoutes = require("./routes/commentRoutes");
+require("./cronJobs/deleteOldPosts"); // Start cron job
+
+const app = express();
+app.use(express.json());
+
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+app.use("/api", postRoutes);
+app.use("/api", commentRoutes);
+
+let PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
